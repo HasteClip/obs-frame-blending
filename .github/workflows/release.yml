@@ -1,0 +1,77 @@
+# Release: set the version in Cargo.toml, then push a tag vX.Y.Z with that
+# version. The plugin is tested and built for release (HasteClip's capture
+# crate at the commit Cargo.lock pins), then packed twice and published as
+# the tag's release:
+#
+# - HasteClip-Frame-Blending-win-Setup.exe: an installer (Inno Setup,
+#   installer/hasteclip_obs.iss) that puts it in
+#   C:\ProgramData\obs-studio\plugins\hasteclip_obs, where OBS 30 and later
+#   look for plugins installed for everyone on the PC.
+# - HasteClip-Frame-Blending-win.zip: the same folder, to extract there by
+#   hand.
+#
+# Their names stay the same from release to release: hasteclip.com/obs links
+# to them through releases/latest/download/.
+#
+# Run by hand (Actions → Release → Run workflow), it tests, builds and packs
+# but publishes nothing: the files are kept on the run, as "release".
+name: Release
+
+on:
+  push:
+    tags: ["v*.*.*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: The tag is the version
+        if: github.ref_type == 'tag'
+        shell: bash
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          version=$(grep -m1 '^version = ' Cargo.toml | cut -d'"' -f2)
+          [ "$version" = "$tag" ] || { echo "Cargo.toml says $version, the tag $tag"; exit 1; }
+
+      - run: cargo test --locked
+
+      - run: cargo build --release --locked
+
+      - name: Pack
+        shell: pwsh
+        run: |
+          $version = (Select-String -Path Cargo.toml -Pattern '^version = "(.+)"' | Select-Object -First 1).Matches[0].Groups[1].Value
+          New-Item -ItemType Directory -Force dist/zip/hasteclip_obs/bin/64bit | Out-Null
+          Copy-Item target/release/hasteclip_obs.dll dist/zip/hasteclip_obs/bin/64bit/
+          Copy-Item LICENSE dist/zip/hasteclip_obs/LICENSE.txt
+          Compress-Archive -Path dist/zip/hasteclip_obs -DestinationPath dist/HasteClip-Frame-Blending-win.zip
+          choco install innosetup -y --no-progress
+          $iscc = Get-ChildItem 'C:\Program Files*\Inno Setup *\ISCC.exe' | Select-Object -First 1
+          if (-not $iscc) { throw 'no Inno Setup' }
+          & $iscc.FullName /Qp "/DVersion=$version" installer/hasteclip_obs.iss
+          if ($LASTEXITCODE -ne 0) { throw "Inno Setup failed: $LASTEXITCODE" }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release
+          path: |
+            dist/HasteClip-Frame-Blending-win-Setup.exe
+            dist/HasteClip-Frame-Blending-win.zip
+          if-no-files-found: error
+
+      - name: Publish
+        if: github.ref_type == 'tag'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" dist/HasteClip-Frame-Blending-win-Setup.exe dist/HasteClip-Frame-Blending-win.zip --title "HasteClip Frame Blending ${GITHUB_REF_NAME#v}" --generate-notes

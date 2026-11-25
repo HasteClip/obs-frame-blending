@@ -1,3 +1,4 @@
 /target
 # A [patch] for building against a HasteClip checkout of your own.
 /.cargo/config.toml
+/dist
