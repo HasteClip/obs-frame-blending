@@ -95,8 +95,70 @@ impl VideoInfo {
     /// Frames a second, as a fraction: after `graphics_module` (a pointer).
     pub fn fps(&self) -> (u32, u32) {
         let at = std::mem::size_of::<*const c_char>();
-        let u32_at = |i: usize| u32::from_ne_bytes(self.bytes[i..i + 4].try_into().unwrap());
-        (u32_at(at), u32_at(at + 4))
+        (self.u32_at(at), self.u32_at(at + 4))
+    }
+
+    /// The canvas's size (`base_width`, `base_height`): after the frame rate.
+    pub fn base_size(&self) -> (u32, u32) {
+        let at = std::mem::size_of::<*const c_char>() + 8;
+        (self.u32_at(at), self.u32_at(at + 4))
+    }
+
+    fn u32_at(&self, i: usize) -> u32 {
+        u32::from_ne_bytes(self.bytes[i..i + 4].try_into().unwrap())
+    }
+}
+
+/// `obs_enum_canvases` and `obs_canvas_get_video_info`: OBS 31 and later
+/// can have more canvases than the main one (Aitum Vertical's vertical
+/// canvas is one). Looked up by name the first time they're wanted, as OBS
+/// 30 doesn't have them, and Windows won't load a DLL with an import it
+/// can't find.
+pub struct Canvases {
+    enumerate: EnumCanvases,
+    video_info: CanvasVideoInfo,
+}
+
+/// `obs_enum_canvases`, `obs_canvas_get_video_info` (as in OBS's obs.h),
+/// and what `GetProcAddress` hands back.
+type EnumCanvases = unsafe extern "C" fn(enum_proc: unsafe extern "C" fn(param: *mut c_void, canvas: *mut c_void) -> bool, param: *mut c_void);
+type CanvasVideoInfo = unsafe extern "C" fn(canvas: *const c_void, ovi: *mut VideoInfo) -> bool;
+type Proc = unsafe extern "system" fn() -> isize;
+
+impl Canvases {
+    /// OBS's, if it has them.
+    pub fn get() -> Option<&'static Canvases> {
+        use windows::Win32::System::LibraryLoader::{GetModuleHandleW, GetProcAddress};
+        use windows::core::{s, w};
+        static FOUND: std::sync::OnceLock<Option<Canvases>> = std::sync::OnceLock::new();
+        FOUND
+            .get_or_init(|| unsafe {
+                let obs = GetModuleHandleW(w!("obs.dll")).ok()?;
+                let enumerate = GetProcAddress(obs, s!("obs_enum_canvases"))?;
+                let video_info = GetProcAddress(obs, s!("obs_canvas_get_video_info"))?;
+                Some(Canvases { enumerate: std::mem::transmute::<Proc, EnumCanvases>(enumerate), video_info: std::mem::transmute::<Proc, CanvasVideoInfo>(video_info) })
+            })
+            .as_ref()
+    }
+
+    /// The sizes of the canvases that have video (a vertical canvas has it
+    /// while it streams or records), the main one among them.
+    pub fn sizes(&self) -> Vec<(u32, u32)> {
+        struct Walk {
+            sizes: Vec<(u32, u32)>,
+            video_info: CanvasVideoInfo,
+        }
+        unsafe extern "C" fn each(param: *mut c_void, canvas: *mut c_void) -> bool {
+            let walk = unsafe { &mut *(param as *mut Walk) };
+            let mut info = VideoInfo::new();
+            if unsafe { (walk.video_info)(canvas, &mut info) } {
+                walk.sizes.push(info.base_size());
+            }
+            true
+        }
+        let mut walk = Walk { sizes: Vec::new(), video_info: self.video_info };
+        unsafe { (self.enumerate)(each, (&raw mut walk).cast()) };
+        walk.sizes
     }
 }
 
@@ -140,6 +202,7 @@ unsafe extern "C" {
     pub fn obs_source_get_unversioned_id(source: *const obs_source_t) -> *const c_char;
     pub fn obs_source_get_settings(source: *const obs_source_t) -> *mut obs_data_t;
     pub fn obs_source_showing(source: *const obs_source_t) -> bool;
+    pub fn obs_source_enabled(source: *const obs_source_t) -> bool;
     pub fn obs_source_get_base_width(source: *mut obs_source_t) -> u32;
     pub fn obs_source_get_base_height(source: *mut obs_source_t) -> u32;
     pub fn obs_source_skip_video_filter(filter: *mut obs_source_t);
@@ -174,6 +237,9 @@ unsafe extern "C" {
     pub fn gs_effect_set_texture(param: *mut gs_eparam_t, val: *mut gs_texture_t);
     pub fn gs_effect_loop(effect: *mut gs_effect_t, name: *const c_char) -> bool;
     pub fn gs_draw_sprite_subregion(tex: *mut gs_texture_t, flip: u32, x: u32, y: u32, cx: u32, cy: u32);
+    pub fn gs_matrix_push();
+    pub fn gs_matrix_pop();
+    pub fn gs_matrix_scale3f(x: f32, y: f32, z: f32);
 }
 
 /// A line in OBS's log, starting `[hasteclip-obs]`.

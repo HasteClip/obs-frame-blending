@@ -8,7 +8,11 @@
 //! Settings: the rate it captures at (a multiple of OBS's frame rate, kept
 //! when that changes, see [`looks_for`]) and how a frame weighs its
 //! pictures (Even or Soft, as in HasteClip). Its status line says what it's
-//! doing, or why it isn't.
+//! doing, or why it isn't, and its last line who it's from ([`CREDIT`]).
+//!
+//! It blends at the size OBS's canvas shows its source, not bigger (a 1440p
+//! game on a 1080p canvas at 1080p, see [`blend_size`]): most of the work
+//! is copying and adding up pictures, and that's work for every pixel.
 //!
 //! OBS calls the filter from its graphics thread (tick, draw) and from its
 //! interface thread (settings, size), which can each be waiting on the
@@ -43,9 +47,17 @@ const DEFAULT_BLEND_FPS: i64 = 240;
 const LOOK_EVERY: f32 = 0.5;
 /// How long after a capture failed it tries again (seconds).
 const RETRY_AFTER: f64 = 3.0;
+/// How often the blending's numbers go to OBS's log, with
+/// `HASTECLIP_BLEND_LOG=1` (see [`log_blend`]).
+const LOG_EVERY: f64 = 5.0;
 
 pub const BLEND_TIP: &CStr = c"How the pictures in each frame are weighed. Even: all the same, so a frame shows just its own moment, and a moving thing's trail ends sharply where the next frame's starts. Soft: the middle of the frame's moment counts most, fading out into the frames either side, so one frame hands over smoothly to the next, a little blurrier.";
 const RATE_TIP: &CStr = c"Captures this many pictures a second and blends them into each of OBS's frames, for smooth motion like motion blur. Only whole multiples of OBS's frame rate, so every frame gets as many. When OBS's frame rate changes, it keeps capturing at about the same rate.";
+
+/// Who it's from, the last line of its settings, "HasteClip" a link to the
+/// plugin's page on HasteClip's site (OBS opens a link in an info text when
+/// it's clicked). A credit, not an ad: HasteClip promises no ads.
+const CREDIT: &CStr = c"From <a href=\"https://hasteclip.com/obs\">HasteClip</a>, the free clip recorder";
 
 /// Register the filter with OBS.
 pub fn register() {
@@ -122,6 +134,57 @@ fn fits(room: Option<(u32, u32)>, size: Option<(u32, u32)>) -> bool {
         (None, _) | (_, None) => true,
         (Some((rw, rh)), Some((w, h))) => w <= rw && h <= rh,
     }
+}
+
+/// The most a source's pictures are shrunk: to half their size. Shrunk
+/// more in one go (a 4K game on a 720p canvas), a picture would lose detail
+/// that OBS's own scaling keeps.
+const LEAST_SCALE: f64 = 0.5;
+
+/// How big a source `source` big is blended, and that as a scale of its
+/// size: big enough to fill the biggest of OBS's `canvases`, as a canvas
+/// smaller than the source shows it shrunk and blending it any bigger is
+/// work thrown away; never bigger than the source, nor under half of it.
+/// A source zoomed in past filling the canvas comes out a little softer.
+fn blend_size(source: (u32, u32), canvases: &[(u32, u32)]) -> ((u32, u32), f64) {
+    let (sw, sh) = (source.0 as f64, source.1 as f64);
+    let fill = canvases.iter().filter(|&&(cw, ch)| cw > 0 && ch > 0).map(|&(cw, ch)| (cw as f64 / sw).max(ch as f64 / sh)).fold(0.0, f64::max);
+    if fill == 0.0 || fill >= 1.0 {
+        return (source, 1.0);
+    }
+    let scale = fill.max(LEAST_SCALE);
+    // Rounded up: the capture shrinks a picture to fit by the smaller of
+    // the two scales, which then isn't under this one.
+    ((((sw * scale).ceil() as u32).min(source.0), ((sh * scale).ceil() as u32).min(source.1)), scale)
+}
+
+/// The size a frame `frame` big is drawn at: its source's size `source`
+/// when it's the same shape (blended smaller, it's stretched back), else
+/// its own size grown back by the `scale` its feed blends at (a window's
+/// client area, when Window Capture shows the window's border too).
+fn drawn_size(frame: (u32, u32), source: Option<(u32, u32)>, scale: f64) -> (u32, u32) {
+    let (fw, fh) = (frame.0 as f64, frame.1 as f64);
+    if let Some((w, h)) = source {
+        // The same shape, give or take shrinking's rounding.
+        if (fw * h as f64 - fh * w as f64).abs() <= 0.01 * fw * h as f64 {
+            return (w, h);
+        }
+    }
+    ((fw / scale).round() as u32, (fh / scale).round() as u32)
+}
+
+/// The sizes of OBS's canvases: the main one, and (OBS 31 and later) the
+/// others that have video.
+fn canvas_sizes() -> Vec<(u32, u32)> {
+    let mut sizes = Vec::new();
+    let mut info = obs::VideoInfo::new();
+    if unsafe { obs::obs_get_video_info(&mut info) } {
+        sizes.push(info.base_size());
+    }
+    if let Some(canvases) = obs::Canvases::get() {
+        sizes.extend(canvases.sizes());
+    }
+    sizes
 }
 
 /// OBS's frame rate, as a fraction (none before OBS's video starts).
@@ -247,8 +310,10 @@ struct Running {
     cursor: bool,
     looks: u32,
     soft: bool,
-    /// The biggest picture it has room for.
+    /// The biggest picture it has room for (a bigger one is shrunk to fit),
+    /// and that as a scale of its source's size then.
     size: Option<(u32, u32)>,
+    scale: f64,
 }
 
 /// The filter's status line, and how it's shown.
@@ -278,6 +343,9 @@ struct State {
     line: Line,
     /// The last frame's size, as drawn.
     shown: Option<(u32, u32)>,
+    /// When the blending's numbers were last logged, and the frames made by
+    /// then (see [`log_blend`]).
+    logged: Option<(f64, u64)>,
 }
 
 struct Filter {
@@ -306,6 +374,7 @@ struct Letting {
 /// Take the running feed and its textures out of `s`, to let go of.
 fn retire(s: &mut State, into: &mut Letting) {
     s.shown = None;
+    s.logged = None;
     into.textures.extend(s.textures.drain().map(|(_, tex)| tex));
     into.feeds.extend(s.running.take());
 }
@@ -361,6 +430,7 @@ unsafe extern "C" fn create(settings: *mut obs_data_t, source: *mut obs_source_t
             known: None,
             line: Line::default(),
             shown: None,
+            logged: None,
         };
         let f = Box::new(Filter { me: source, state: Mutex::new(state) });
         let data = Box::into_raw(f) as *mut c_void;
@@ -420,6 +490,8 @@ unsafe extern "C" fn get_properties(data: *mut c_void) -> *mut obs_properties_t 
                 obs::obs_property_text_set_info_type(info, line.kind);
                 obs::obs_property_text_set_info_word_wrap(info, true);
             }
+            let info = obs::obs_properties_add_text(props, c"credit".as_ptr(), CREDIT.as_ptr(), obs::OBS_TEXT_INFO);
+            obs::obs_property_text_set_info_word_wrap(info, true);
             props
         }
     })
@@ -440,8 +512,10 @@ struct Plan {
     /// The rate as set, kept to one the menu offers at OBS's frame rate.
     snapped: Option<i64>,
     wants: Wants,
-    /// The source's size now.
+    /// How big the source is blended now, and that as a scale of its size
+    /// ([`blend_size`]).
     size: Option<(u32, u32)>,
+    scale: f64,
     /// A window newly found for the source.
     found: Known,
     now: f64,
@@ -494,6 +568,10 @@ fn look(f: &Filter, seen: &Seen) -> Option<Plan> {
     let mut found = None;
     let wants = if parent.is_null() {
         Wants::Waiting("not on a source yet".into())
+    } else if !unsafe { obs::obs_source_enabled(f.me) } {
+        // Turned off with its eye: OBS ticks it all the same, and a feed
+        // left running cost as much as one blending (measured).
+        Wants::Waiting("it's turned off".into())
     } else if seen.adapter.is_none() {
         Wants::NotHere("Frame blending needs OBS to draw with Direct3D 11 (Settings → Advanced → Video → Renderer).".into())
     } else if looks < 2 {
@@ -503,20 +581,24 @@ fn look(f: &Filter, seen: &Seen) -> Option<Plan> {
     } else {
         unsafe { wants(parent, &seen.known, &mut found) }
     };
-    let size = if parent.is_null() {
-        None
-    } else {
-        let (w, h) = unsafe { (obs::obs_source_get_base_width(parent), obs::obs_source_get_base_height(parent)) };
-        (w >= 2 && h >= 2).then_some((w, h))
-    };
-    Some(Plan { fps, period_ns, looks, snapped, wants, size, found, now: host_now() })
+    let blend = source_size(parent).map(|source| blend_size(source, &canvas_sizes()));
+    Some(Plan { fps, period_ns, looks, snapped, wants, size: blend.map(|b| b.0), scale: blend.map_or(1.0, |b| b.1), found, now: host_now() })
+}
+
+/// The filter's source's size (none before it has a picture).
+fn source_size(parent: *mut obs_source_t) -> Option<(u32, u32)> {
+    if parent.is_null() {
+        return None;
+    }
+    let (w, h) = unsafe { (obs::obs_source_get_base_width(parent), obs::obs_source_get_base_height(parent)) };
+    (w >= 2 && h >= 2).then_some((w, h))
 }
 
 /// Start, change or stop the feed to match what was found; then say how
 /// it's doing. Under the lock: quick, and calls nothing that waits (what's
 /// let go of goes into `letting`).
 fn follow(s: &mut State, plan: Plan, letting: &mut Letting) {
-    let Plan { fps, period_ns, looks, snapped, wants, size, found, now } = plan;
+    let Plan { fps, period_ns, looks, snapped, wants, size, scale, found, now } = plan;
     if let Some(rate) = snapped {
         s.blend_fps = rate;
     }
@@ -540,12 +622,19 @@ fn follow(s: &mut State, plan: Plan, letting: &mut Letting) {
                     r.feed.set_blend(looks, if soft { BlendShape::Soft } else { BlendShape::Even });
                     (r.looks, r.soft) = (looks, soft);
                 }
+            } else if size.is_none() {
+                // Started once its source has a picture, as how big that is
+                // says how big to blend ([`blend_size`]): Window Capture
+                // has none for a moment after it finds its window.
+                retire(s, letting);
+                s.line = Line { text: "Not blending: waiting for its source's first picture.".into(), kind: obs::OBS_TEXT_INFO_NORMAL };
+                return;
             } else if now >= s.retry_at {
                 retire(s, letting);
                 let shape = if s.soft { BlendShape::Soft } else { BlendShape::Even };
                 let options = Options { t0: now, period_ns, looks, shape, cursor, adapter: s.adapter, size };
-                obs::log(obs::LOG_INFO, &format!("blending {target:?} ({size:?}): {looks} pictures a frame at {} fps", rate_text(1, fps)));
-                s.running = Some(Running { feed: Feed::start(target, options), target, period_ns, cursor, looks, soft: s.soft, size });
+                obs::log(obs::LOG_INFO, &format!("blending {target:?} at {size:?} ({:.0}% of its size): {looks} pictures a frame at {} fps", scale * 100.0, rate_text(1, fps)));
+                s.running = Some(Running { feed: Feed::start(target, options), target, period_ns, cursor, looks, soft: s.soft, size, scale });
             }
         }
         Wants::Waiting(why) => {
@@ -571,6 +660,40 @@ fn follow(s: &mut State, plan: Plan, letting: &mut Letting) {
         (None, Some(why)) => Line { text: format!("Not blending: {why}. Trying again."), kind: obs::OBS_TEXT_INFO_ERROR },
         (None, None) => Line::default(),
     };
+    log_blend(s, now);
+}
+
+/// The blending's numbers in OBS's log every [`LOG_EVERY`] seconds, with
+/// `HASTECLIP_BLEND_LOG=1`, as HasteClip logs its own: the frames made, the
+/// source's new pictures a second, and how many different pictures each
+/// frame's looks saw (all of them, when the source keeps up).
+fn log_blend(s: &mut State, now: f64) {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    if !*ON.get_or_init(|| std::env::var_os("HASTECLIP_BLEND_LOG").is_some_and(|v| v != "0")) {
+        return;
+    }
+    let Some(r) = &s.running else { return };
+    let st = r.feed.status();
+    match s.logged {
+        Some((at, _)) if now - at < LOG_EVERY => {}
+        Some((at, frames)) => {
+            let made = st.frames.saturating_sub(frames);
+            obs::log(
+                obs::LOG_INFO,
+                &format!(
+                    "blending: {made} frames in {:.1} s, {} new pictures a second, {:.2} different a frame of {} (fewest {}), shown {} frames late",
+                    now - at,
+                    st.pictures,
+                    st.different,
+                    st.looks,
+                    st.fewest,
+                    st.delay
+                ),
+            );
+            s.logged = Some((now, st.frames));
+        }
+        None => s.logged = Some((now, st.frames)),
+    }
 }
 
 unsafe extern "C" fn video_render(data: *mut c_void, _effect: *mut gs_effect_t) {
@@ -580,18 +703,18 @@ unsafe extern "C" fn video_render(data: *mut c_void, _effect: *mut gs_effect_t) 
         // still being written), with their textures: picked under the lock
         // (OBS's graphics are held here already); drawn outside it, as OBS
         // may ask the filter's size meanwhile.
-        let candidates: Vec<(Frame, *mut gs_texture_t)> = {
+        let (candidates, scale): (Vec<(Frame, *mut gs_texture_t)>, f64) = {
             let mut s = f.lock();
             let t = host_now();
-            let frames: Vec<Frame> = match &s.running {
+            let (frames, scale): (Vec<Frame>, f64) = match &s.running {
                 Some(r) => {
                     let first = r.feed.frame_for(t);
                     let before = first.and_then(|fr| r.feed.frame_before(fr.index));
-                    [first, before].into_iter().flatten().collect()
+                    ([first, before].into_iter().flatten().collect(), r.scale)
                 }
-                None => Vec::new(),
+                None => (Vec::new(), 1.0),
             };
-            frames
+            let candidates = frames
                 .into_iter()
                 .filter_map(|frame| {
                     let tex = match s.textures.get(&frame.handle) {
@@ -607,26 +730,37 @@ unsafe extern "C" fn video_render(data: *mut c_void, _effect: *mut gs_effect_t) 
                     };
                     Some((frame, tex))
                 })
-                .collect()
+                .collect();
+            (candidates, scale)
         };
-        let drawn = candidates.into_iter().find(|(frame, tex)| unsafe { draw(*tex, frame.width, frame.height) });
+        let source = source_size(unsafe { obs::obs_filter_get_parent(f.me) });
+        let drawn = candidates.into_iter().find_map(|(frame, tex)| {
+            let size = drawn_size((frame.width, frame.height), source, scale);
+            unsafe { draw(tex, frame.width, frame.height, size) }.then_some(size)
+        });
         match drawn {
-            Some((frame, _)) => f.lock().shown = Some((frame.width, frame.height)),
+            Some(size) => f.lock().shown = Some(size),
             None => unsafe { obs::obs_source_skip_video_filter(f.me) },
         }
     })
 }
 
-/// Draw `width`×`height` of a shared frame from its top-left corner, opaque
-/// (a game's pictures can have anything in their alpha). False, at once, if
-/// its texture is being written.
+/// Draw `width`×`height` of a shared frame from its top-left corner,
+/// stretched to `size` (its source's size, when it was blended smaller),
+/// opaque (a game's pictures can have anything in their alpha). False, at
+/// once, if its texture is being written.
 ///
 /// # Safety
 /// In OBS's graphics; `tex` an open shared texture.
-unsafe fn draw(tex: *mut gs_texture_t, width: u32, height: u32) -> bool {
+unsafe fn draw(tex: *mut gs_texture_t, width: u32, height: u32, size: (u32, u32)) -> bool {
     unsafe {
         if obs::gs_texture_acquire_sync(tex, 0, 0) != 0 {
             return false;
+        }
+        let stretched = size != (width, height);
+        if stretched {
+            obs::gs_matrix_push();
+            obs::gs_matrix_scale3f(size.0 as f32 / width as f32, size.1 as f32 / height as f32, 1.0);
         }
         let effect = obs::obs_get_base_effect(obs::OBS_EFFECT_OPAQUE);
         let image = obs::gs_effect_get_param_by_name(effect, c"image".as_ptr());
@@ -634,12 +768,15 @@ unsafe fn draw(tex: *mut gs_texture_t, width: u32, height: u32) -> bool {
         while obs::gs_effect_loop(effect, c"Draw".as_ptr()) {
             obs::gs_draw_sprite_subregion(tex, 0, 0, 0, width, height);
         }
+        if stretched {
+            obs::gs_matrix_pop();
+        }
         obs::gs_texture_release_sync(tex, 0);
     }
     true
 }
 
-/// The filter's size: the blended frame's, else its source's.
+/// The filter's size: the blended frame's as drawn, else its source's.
 fn size(data: *mut c_void) -> (u32, u32) {
     let f = unsafe { filter(data) };
     let shown = f.lock().shown;
@@ -689,6 +826,39 @@ mod tests {
         assert!(rates(1200.0).is_empty());
         assert_eq!(rate_text(4, 59.94), "239.76");
         assert_eq!(rate_text(4, 60.0), "240");
+    }
+
+    /// Blended as big as it takes to fill the biggest canvas with video: a
+    /// 1440p game on a 1080p canvas at 1080p, an ultrawide one filling the
+    /// canvas's height; never bigger than the source, nor under half of it;
+    /// whole while a vertical canvas streams (it shows the game zoomed in).
+    #[test]
+    fn blended_at_the_canvas_size() {
+        let hd = (1920, 1080);
+        assert_eq!(blend_size((2560, 1440), &[hd]), ((1920, 1080), 0.75));
+        assert_eq!(blend_size((2560, 1440), &[hd, hd]), ((1920, 1080), 0.75));
+        assert_eq!(blend_size((1920, 1080), &[hd]), ((1920, 1080), 1.0));
+        assert_eq!(blend_size((1280, 720), &[hd]), ((1280, 720), 1.0));
+        assert_eq!(blend_size((3440, 1440), &[hd]), ((2580, 1080), 0.75));
+        assert_eq!(blend_size((2560, 1600), &[hd]), ((1920, 1200), 0.75));
+        assert_eq!(blend_size((2560, 1440), &[hd, (1080, 1920)]), ((2560, 1440), 1.0));
+        assert_eq!(blend_size((3840, 2160), &[(1280, 720)]), ((1920, 1080), 0.5));
+        assert_eq!(blend_size((2560, 1440), &[]), ((2560, 1440), 1.0));
+        assert_eq!(blend_size((2560, 1440), &[(0, 0)]), ((2560, 1440), 1.0));
+    }
+
+    /// Drawn at its source's size when blended smaller, so the scene keeps
+    /// its layout; a window's client area (Window Capture showing the
+    /// window's border too) at its own size, grown back by its feed's scale.
+    #[test]
+    fn drawn_at_the_source_size() {
+        assert_eq!(drawn_size((1920, 1080), Some((2560, 1440)), 0.75), (2560, 1440));
+        // The game went to 4K since: shrunk more, still drawn whole.
+        assert_eq!(drawn_size((1920, 1080), Some((3840, 2160)), 0.75), (3840, 2160));
+        assert_eq!(drawn_size((954, 536), Some((1366, 768)), 0.7), (1366, 768));
+        assert_eq!(drawn_size((1920, 1080), Some((1936, 1119)), 1.0), (1920, 1080));
+        assert_eq!(drawn_size((1920, 1080), Some((2576, 1479)), 0.745), (2577, 1450));
+        assert_eq!(drawn_size((1920, 1080), None, 0.75), (2560, 1440));
     }
 
     /// A feed is started again only when its pictures outgrow its room.
