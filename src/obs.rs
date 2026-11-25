@@ -242,9 +242,9 @@ unsafe extern "C" {
     pub fn gs_matrix_scale3f(x: f32, y: f32, z: f32);
 }
 
-/// A line in OBS's log, starting `[hasteclip-obs]`.
+/// A line in OBS's log, starting `[hasteclip-frame-blending]`.
 pub fn log(level: c_int, message: &str) {
-    let text = std::ffi::CString::new(format!("[hasteclip-obs] {message}").replace('\0', " ")).unwrap_or_default();
+    let text = std::ffi::CString::new(format!("[hasteclip-frame-blending] {message}").replace('\0', " ")).unwrap_or_default();
     unsafe { blog(level, c"%s".as_ptr(), text.as_ptr()) };
 }
 

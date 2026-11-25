@@ -18,4 +18,4 @@ Please don't:
 - suggest that your version is official or endorsed by HasteClip.
 
 If you fork it, give it your own name and icon. Questions: open an issue on
-https://github.com/hasteclip/hasteclip-obs.
+https://github.com/hasteclip/obs-frame-blending.

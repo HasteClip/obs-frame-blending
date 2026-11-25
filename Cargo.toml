@@ -1,15 +1,15 @@
 [package]
-name = "hasteclip-obs"
+name = "obs-frame-blending"
 version = "0.1.0"
 edition = "2024"
 license = "GPL-3.0-or-later"
 description = "Frame blending for OBS Studio, from HasteClip"
-repository = "https://github.com/HasteClip/hasteclip-obs"
+repository = "https://github.com/HasteClip/obs-frame-blending"
 publish = false
 
 [lib]
-# OBS loads plugins by their file name: hasteclip_obs.dll.
-name = "hasteclip_obs"
+# OBS loads plugins by their file name: hasteclip_frame_blending.dll.
+name = "hasteclip_frame_blending"
 crate-type = ["cdylib"]
 
 [dependencies]

@@ -4,8 +4,8 @@
 # the tag's release:
 #
 # - HasteClip-Frame-Blending-win-Setup.exe: an installer (Inno Setup,
-#   installer/hasteclip_obs.iss) that puts it in
-#   C:\ProgramData\obs-studio\plugins\hasteclip_obs, where OBS 30 and later
+#   installer/hasteclip_frame_blending.iss) that puts it in
+#   C:\ProgramData\obs-studio\plugins\hasteclip_frame_blending, where OBS 30 and later
 #   look for plugins installed for everyone on the PC.
 # - HasteClip-Frame-Blending-win.zip: the same folder, to extract there by
 #   hand.
@@ -51,14 +51,14 @@ jobs:
         shell: pwsh
         run: |
           $version = (Select-String -Path Cargo.toml -Pattern '^version = "(.+)"' | Select-Object -First 1).Matches[0].Groups[1].Value
-          New-Item -ItemType Directory -Force dist/zip/hasteclip_obs/bin/64bit | Out-Null
-          Copy-Item target/release/hasteclip_obs.dll dist/zip/hasteclip_obs/bin/64bit/
-          Copy-Item LICENSE dist/zip/hasteclip_obs/LICENSE.txt
-          Compress-Archive -Path dist/zip/hasteclip_obs -DestinationPath dist/HasteClip-Frame-Blending-win.zip
+          New-Item -ItemType Directory -Force dist/zip/hasteclip_frame_blending/bin/64bit | Out-Null
+          Copy-Item target/release/hasteclip_frame_blending.dll dist/zip/hasteclip_frame_blending/bin/64bit/
+          Copy-Item LICENSE dist/zip/hasteclip_frame_blending/LICENSE.txt
+          Compress-Archive -Path dist/zip/hasteclip_frame_blending -DestinationPath dist/HasteClip-Frame-Blending-win.zip
           choco install innosetup -y --no-progress
           $iscc = Get-ChildItem 'C:\Program Files*\Inno Setup *\ISCC.exe' | Select-Object -First 1
           if (-not $iscc) { throw 'no Inno Setup' }
-          & $iscc.FullName /Qp "/DVersion=$version" installer/hasteclip_obs.iss
+          & $iscc.FullName /Qp "/DVersion=$version" installer/hasteclip_frame_blending.iss
           if ($LASTEXITCODE -ne 0) { throw "Inno Setup failed: $LASTEXITCODE" }
 
       - uses: actions/upload-artifact@v4

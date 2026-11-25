@@ -2,7 +2,7 @@
 
 A filter for [OBS Studio](https://obsproject.com) that gives a Game Capture, Window Capture or Display Capture [HasteClip](https://github.com/HasteClip/hasteclip)'s frame blending. The picture is captured several times faster than OBS's frame rate, and the pictures in each frame's time are blended into it, for smooth motion like motion blur.
 
-It works live. You don't need to set OBS to 240 fps, and it goes into the stream, recordings, the replay buffer and the virtual camera alike.
+It works live, and on its own: you don't need HasteClip, nor to set OBS to 240 fps. It goes into the stream, recordings, the replay buffer and the virtual camera alike.
 
 ```
 Windows: works; built and tried in OBS 32.2.2 (Game Capture, Window Capture and Display Capture)
@@ -12,10 +12,10 @@ Linux:   not yet (it would capture through PipeWire, up to the display's refresh
 
 ## Installing
 
-Download it from **[hasteclip.com/obs](https://hasteclip.com/obs)** (or the [latest release](https://github.com/HasteClip/hasteclip-obs/releases/latest)). It needs OBS Studio 30 or later on Windows 10 or 11, drawing with Direct3D 11 (OBS's default).
+Download it from **[hasteclip.com/obs](https://hasteclip.com/obs)** (or the [latest release](https://github.com/HasteClip/obs-frame-blending/releases/latest)). It needs OBS Studio 30 or later on Windows 10 or 11, drawing with Direct3D 11 (OBS's default).
 
-- **The installer** (`HasteClip-Frame-Blending-win-Setup.exe`) puts it in `C:\ProgramData\obs-studio\plugins\hasteclip_obs`, where OBS looks for plugins installed for everyone on the PC. OBS's own updates leave it there. If OBS is open, the installer asks to close it first.
-- **The zip** (`HasteClip-Frame-Blending-win.zip`) holds that same `hasteclip_obs` folder: extract it into `C:\ProgramData\obs-studio\plugins`.
+- **The installer** (`HasteClip-Frame-Blending-win-Setup.exe`) puts it in `C:\ProgramData\obs-studio\plugins\hasteclip_frame_blending`, where OBS looks for plugins installed for everyone on the PC. OBS's own updates leave it there. If OBS is open, the installer asks to close it first.
+- **The zip** (`HasteClip-Frame-Blending-win.zip`) holds that same `hasteclip_frame_blending` folder: extract it into `C:\ProgramData\obs-studio\plugins`.
 
 Then start OBS again. To remove it, uninstall *HasteClip Frame Blending* in Windows' Settings → Apps, or delete the folder.
 
@@ -64,7 +64,7 @@ To build against a HasteClip checkout of your own (to change the capture side to
 capture = { path = "../hasteclip/crates/capture" }
 ```
 
-Copy `target\release\hasteclip_obs.dll` into `C:\ProgramData\obs-studio\plugins\hasteclip_obs\bin\64bit\`, or into OBS's own `obs-plugins\64bit` folder (not both: OBS would load it twice).
+Copy `target\release\hasteclip_frame_blending.dll` into `C:\ProgramData\obs-studio\plugins\hasteclip_frame_blending\bin\64bit\`, or into OBS's own `obs-plugins\64bit` folder (not both: OBS would load it twice).
 
 ## Releasing
 

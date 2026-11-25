@@ -1,11 +1,11 @@
 ; The Windows installer for HasteClip Frame Blending, made by the release
 ; workflow (.github/workflows/release.yml) with Inno Setup 6.3 or later:
 ;
-;   ISCC /DVersion=0.1.0 installer\hasteclip_obs.iss
+;   ISCC /DVersion=0.1.0 installer\hasteclip_frame_blending.iss
 ;
 ; after `cargo build --release`. It puts the plugin where OBS Studio 30 and
 ; later look for plugins installed for everyone on the PC,
-; C:\ProgramData\obs-studio\plugins\hasteclip_obs (its DLL in bin\64bit),
+; C:\ProgramData\obs-studio\plugins\hasteclip_frame_blending (its DLL in bin\64bit),
 ; which OBS's own updates leave alone.
 
 #ifndef Version
@@ -20,10 +20,10 @@ AppVersion={#Version}
 AppVerName=HasteClip Frame Blending {#Version}
 AppPublisher=HasteClip
 AppPublisherURL=https://hasteclip.com/obs
-AppSupportURL=https://github.com/HasteClip/hasteclip-obs/issues
+AppSupportURL=https://github.com/HasteClip/obs-frame-blending/issues
 AppUpdatesURL=https://hasteclip.com/obs
 VersionInfoVersion={#Version}
-DefaultDirName={commonappdata}\obs-studio\plugins\hasteclip_obs
+DefaultDirName={commonappdata}\obs-studio\plugins\hasteclip_frame_blending
 DisableDirPage=yes
 DisableProgramGroupPage=yes
 PrivilegesRequired=admin
@@ -40,7 +40,7 @@ CloseApplications=yes
 RestartApplications=no
 
 [Files]
-Source: "..\target\release\hasteclip_obs.dll"; DestDir: "{app}\bin\64bit"; Flags: ignoreversion
+Source: "..\target\release\hasteclip_frame_blending.dll"; DestDir: "{app}\bin\64bit"; Flags: ignoreversion
 Source: "..\LICENSE"; DestDir: "{app}"; DestName: "LICENSE.txt"; Flags: ignoreversion
 
 [Messages]

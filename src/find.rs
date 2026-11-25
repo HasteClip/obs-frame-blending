@@ -195,11 +195,11 @@ mod tests {
             unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wp: windows::Win32::Foundation::WPARAM, lp: LPARAM) -> windows::Win32::Foundation::LRESULT {
                 unsafe { DefWindowProcW(hwnd, msg, wp, lp) }
             }
-            let class = WNDCLASSW { lpfnWndProc: Some(proc), hInstance: instance.into(), lpszClassName: w!("hasteclip_obs_test"), ..Default::default() };
+            let class = WNDCLASSW { lpfnWndProc: Some(proc), hInstance: instance.into(), lpszClassName: w!("hasteclip_frame_blending_test"), ..Default::default() };
             RegisterClassW(&class);
             let hwnd = CreateWindowExW(
                 WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
-                w!("hasteclip_obs_test"),
+                w!("hasteclip_frame_blending_test"),
                 w!("busy window"),
                 WS_POPUP,
                 -32000,
@@ -222,7 +222,7 @@ mod tests {
         let window_made_hwnd = window_made.recv().unwrap();
         let exe = std::env::current_exe().unwrap().file_name().unwrap().to_string_lossy().into_owned();
         let started = Instant::now();
-        let found = window(&WindowName { title: "busy window".into(), class: "hasteclip_obs_test".into(), exe });
+        let found = window(&WindowName { title: "busy window".into(), class: "hasteclip_frame_blending_test".into(), exe });
         let took = started.elapsed();
         // What froze OBS: GetWindowTextW on a window of one's own process
         // waits for its thread to answer, and this one's busy.
