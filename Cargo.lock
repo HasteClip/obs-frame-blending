@@ -417,7 +417,7 @@ checksum = "fc652a48c352aef3ea3aed32080501cf3ef6ed5da78602a020c991775b0aff04"
 [[package]]
 name = "capture"
 version = "0.1.0"
-source = "git+https://github.com/HasteClip/hasteclip?branch=feat%2Fobs-plugin#c3f873e615bf0e09187bcce5cc8f2a9b6d47eee3"
+source = "git+https://github.com/HasteClip/hasteclip?branch=feat%2Fobs-plugin#c59310aff83fefdba054a8a52b76eefcd5935505"
 dependencies = [
  "anyhow",
  "ash",
